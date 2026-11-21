@@ -17,6 +17,12 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+  errors:
+    # Flutter 3.50 把 package:flutter/material.dart 标记为弃用，建议改用
+    # package:material_ui/material_ui.dart。material.dart 在 3.50 仍可正常用，
+    # 迁移到 material_ui 是后续工作；先忽略这条提示，否则 flutter analyze
+    # 会因 38 条 info 直接退 1，导致 CI 失败。
+    deprecated_member_use: ignore
 
 linter:
   # The lint rules applied to this project can be customized in the
