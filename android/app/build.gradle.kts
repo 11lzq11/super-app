@@ -6,7 +6,10 @@ plugins {
 
 android {
     namespace = "com.superapp.superapp"
-    compileSdk = flutter.compileSdkVersion
+    // file_picker 依赖的 flutter_plugin_android_lifecycle 要求 compileSdk >= 36，
+    // Flutter 模板默认的 flutter.compileSdkVersion 是 34，会报
+    // "checkReleaseAarMetadata" 失败，所以这里写死 36。
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
