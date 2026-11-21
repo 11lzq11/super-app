@@ -1,0 +1,35 @@
+name: superapp
+description: "SuperApp — 科学计算器、单位转换、函数绘制、AiPlat、WebOS、Super MAX 模式。"
+publish_to: 'none'
+
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.14.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  provider: ^6.1.2
+  shared_preferences: ^2.2.2
+  path_provider: ^2.1.2
+  math_expressions: ^2.7.0
+  dio: ^5.4.0
+  flutter_markdown: ^0.7.4
+  webview_flutter: ^4.10.0
+  shelf: ^1.4.1
+  shelf_static: ^1.1.2
+  file_picker: ^8.0.0
+  image_picker: ^1.1.2
+  qr_flutter: ^4.1.0
+  archive: ^3.6.1
+  mime: ^2.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
