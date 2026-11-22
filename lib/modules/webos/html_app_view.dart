@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'local_server.dart';
@@ -67,6 +69,13 @@ const String _bridgeJs = r'''
 ''';
 
 /// HTML 应用窗口内容：WebView 加载 localhost 上的应用页面。
+///
+/// 加载加固：
+/// - 加载前先探测本地服务是否真的能响应，不行就重启服务再试；
+/// - 只把主框架（main frame）的资源错误当失败：favicon 等子资源 404
+///   会被忽略，不会再把已经打开的应用误判成加载失败；
+/// - 主框架失败或 15 秒无响应时自动重试，最多 3 次；
+/// - 3 次都失败才显示错误页，带诊断信息（端口、地址、错误原因）与重试。
 class HtmlAppView extends StatefulWidget {
   final String appId;
   final String appName;
@@ -84,20 +93,29 @@ class HtmlAppView extends StatefulWidget {
 }
 
 class _HtmlAppViewState extends State<HtmlAppView> {
+  static const int _maxAttempts = 3;
+  static const Duration _loadTimeout = Duration(seconds: 15);
+  static const Duration _retryDelay = Duration(milliseconds: 800);
+
   WebViewController? _controller;
   String? _error;
+  String? _errorDetail;
   bool _loading = true;
+  bool _pageLoaded = false;
+  int _attempt = 0;
+  Timer? _loadTimer;
 
   @override
   void initState() {
     super.initState();
     // 订阅发给本应用的消息，转成页面内的 webos-message 事件。
     webOSMessageBus.subscribe(widget.appId, _onBusMessage);
-    _initWebView();
+    _startLoad();
   }
 
   @override
   void dispose() {
+    _loadTimer?.cancel();
     webOSMessageBus.unsubscribe(widget.appId, _onBusMessage);
     super.dispose();
   }
@@ -113,72 +131,154 @@ class _HtmlAppViewState extends State<HtmlAppView> {
         .catchError((_) {});
   }
 
-  Future<void> _initWebView() async {
+  /// 从头开始加载（手动重试时调）：重置计数与状态。
+  Future<void> _startLoad() async {
     // webview_flutter 不支持 Linux：直接给友好提示，不创建控制器。
     if (Platform.isLinux) {
       setState(() {
         _error = '当前平台不支持 WebView，HTML 应用无法运行';
+        _errorDetail = 'webview_flutter 没有 Linux 实现';
         _loading = false;
       });
+      return;
+    }
+    _attempt = 0;
+    _pageLoaded = false;
+    await _loadAttempt();
+  }
+
+  /// 一次加载尝试：先确认服务就绪，再加载 URL。
+  Future<void> _loadAttempt() async {
+    if (!mounted) return;
+    _attempt++;
+    setState(() {
+      _error = null;
+      _errorDetail = null;
+      _loading = true;
+    });
+
+    // 1. 确保本地服务真的能响应（不行就重启服务再探测一次）。
+    final ready = await WebOSLocalServer.instance.ensureReady();
+    if (!mounted) return;
+    if (!ready) {
+      _handleFailure(
+        '本地服务未启动',
+        'localhost 服务启动后仍无响应，请退出 WebOS 后重新进入',
+      );
       return;
     }
     final url = WebOSLocalServer.instance.appUrl(widget.appId);
     if (url == null) {
-      setState(() {
-        _error = '本地服务未启动，请退出 WebOS 后重新进入';
-        _loading = false;
-      });
+      _handleFailure('本地服务未启动', '服务地址为空，请退出 WebOS 后重新进入');
       return;
     }
+
+    // 2. 加载页面（控制器只建一次，重试时复用）。
     try {
-      final controller = WebViewController();
-      await controller.setJavaScriptMode(JavaScriptMode.unrestricted);
-      await controller.setBackgroundColor(Colors.white);
-      await controller.setNavigationDelegate(
-        NavigationDelegate(
-          onNavigationRequest: (request) {
-            // webos://launch?app=<id>&param=... ：应用内链接启动另一应用
-            if (request.url.startsWith('webos://')) {
-              final uri = Uri.tryParse(request.url);
-              final appId = uri?.queryParameters['app'];
-              if (appId != null && appId.isNotEmpty) {
-                final params = Map<String, dynamic>.from(
-                  uri!.queryParameters,
-                )..remove('app');
-                widget.host.launchApp(appId, params: params);
+      var controller = _controller;
+      if (controller == null) {
+        controller = WebViewController();
+        await controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+        await controller.setBackgroundColor(Colors.white);
+        await controller.setNavigationDelegate(
+          NavigationDelegate(
+            onPageStarted: (_) {
+              _pageLoaded = false;
+              _armLoadTimeout();
+            },
+            onNavigationRequest: (request) {
+              // webos://launch?app=<id>&param=... ：应用内链接启动另一应用
+              if (request.url.startsWith('webos://')) {
+                final uri = Uri.tryParse(request.url);
+                final appId = uri?.queryParameters['app'];
+                if (appId != null && appId.isNotEmpty) {
+                  final params = Map<String, dynamic>.from(
+                    uri!.queryParameters,
+                  )..remove('app');
+                  widget.host.launchApp(appId, params: params);
+                }
+                return NavigationDecision.prevent;
               }
-              return NavigationDecision.prevent;
-            }
-            return NavigationDecision.navigate;
-          },
-          onPageFinished: (_) {
-            _controller?.runJavaScript(_bridgeJs).catchError((_) {});
-            if (mounted) setState(() => _loading = false);
-          },
-          onWebResourceError: (error) {
-            if (mounted) {
-              setState(() {
-                _error = '页面加载失败：${error.description}';
-                _loading = false;
-              });
-            }
-          },
-        ),
-      );
-      await controller.addJavaScriptChannel(
-        'WebOSBridge',
-        onMessageReceived: _onBridgeMessage,
-      );
+              return NavigationDecision.navigate;
+            },
+            onPageFinished: (_) {
+              _pageLoaded = true;
+              _loadTimer?.cancel();
+              _controller?.runJavaScript(_bridgeJs).catchError((_) {});
+              if (mounted) {
+                setState(() {
+                  _loading = false;
+                  _error = null;
+                  _errorDetail = null;
+                });
+              }
+            },
+            onWebResourceError: (error) {
+              // 子资源错误（典型如 favicon.ico 404）不是页面失败：
+              // 只有明确是主框架的错误才当作加载失败。
+              if (error.isForMainFrame == false) return;
+              _handleFailure(
+                '页面加载失败',
+                '错误码 ${error.errorCode}'
+                '（${error.errorType?.name ?? 'unknown'}）'
+                '${error.description.isNotEmpty ? '：${error.description}' : ''}',
+              );
+            },
+          ),
+        );
+        await controller.addJavaScriptChannel(
+          'WebOSBridge',
+          onMessageReceived: _onBridgeMessage,
+        );
+        _controller = controller;
+      }
+      _armLoadTimeout();
       await controller.loadRequest(Uri.parse(url));
       if (mounted) setState(() => _controller = controller);
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = 'WebView 初始化失败：$e';
-          _loading = false;
-        });
-      }
+      _handleFailure('WebView 加载失败', '$e');
     }
+  }
+
+  /// 15 秒内没 onPageFinished 就算超时。
+  void _armLoadTimeout() {
+    _loadTimer?.cancel();
+    _loadTimer = Timer(_loadTimeout, () {
+      if (!mounted || _pageLoaded) return;
+      _handleFailure(
+        '页面加载超时',
+        '应用在 ${_loadTimeout.inSeconds} 秒内没有响应',
+      );
+    });
+  }
+
+  /// 一次失败：次数未用完就自动重试，用完才显示错误页。
+  void _handleFailure(String title, String detail) {
+    _loadTimer?.cancel();
+    if (_attempt < _maxAttempts && mounted && !_pageLoaded) {
+      Future.delayed(_retryDelay, () {
+        if (mounted && !_pageLoaded) _loadAttempt();
+      });
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _error = title;
+        _errorDetail = detail;
+        _loading = false;
+      });
+    }
+  }
+
+  /// 诊断信息：端口、地址、尝试次数、错误原因，供错误页展示与复制。
+  String get _diagnostics {
+    final port = WebOSLocalServer.instance.port;
+    final url = WebOSLocalServer.instance.appUrl(widget.appId);
+    return '应用：${widget.appId}（${widget.appName}）\n'
+        '地址：${url ?? '（服务未启动）'}\n'
+        '端口：${port?.toString() ?? '（未知）'}\n'
+        '尝试：$_attempt/$_maxAttempts 次\n'
+        '错误：${_errorDetail ?? '未知'}';
   }
 
   /// 处理 JS Bridge 发来的消息（JSON 字符串）。
@@ -243,29 +343,69 @@ class _HtmlAppViewState extends State<HtmlAppView> {
   Widget build(BuildContext context) {
     if (_error != null) {
       return Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.warning_amber_outlined, size: 40),
+              const Icon(
+                Icons.warning_amber_outlined,
+                size: 40,
+                color: Colors.orange,
+              ),
               const SizedBox(height: 12),
               Text(
                 _error!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 14),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _diagnostics,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontFamily: 'monospace',
+                  ),
+                ),
               ),
               const SizedBox(height: 16),
-              FilledButton(
-                onPressed: () {
-                  setState(() {
-                    _error = null;
-                    _loading = true;
-                    _controller = null;
-                  });
-                  _initWebView();
-                },
-                child: const Text('重试'),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  FilledButton(
+                    onPressed: () {
+                      setState(() {
+                        _error = null;
+                        _errorDetail = null;
+                        _loading = true;
+                      });
+                      _startLoad();
+                    },
+                    child: const Text('重试'),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton(
+                    onPressed: () {
+                      Clipboard.setData(
+                        ClipboardData(text: _diagnostics),
+                      );
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('诊断信息已复制')),
+                      );
+                    },
+                    child: const Text('复制诊断信息'),
+                  ),
+                ],
               ),
             ],
           ),

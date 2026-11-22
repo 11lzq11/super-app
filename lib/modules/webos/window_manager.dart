@@ -70,6 +70,10 @@ class WindowManager extends ChangeNotifier {
 
   /// 打开窗口。同个应用默认单实例：已打开则聚焦并更新参数；
   /// [replaceExisting] 为 true 时先关闭旧窗口再开新的（用于记事本打开不同文件）。
+  ///
+  /// [area] 是窗口可活动的桌面区域（已扣掉顶栏避让区与任务栏）：
+  /// 传入时初始位置与尺寸会被夹在区域内，窗口永远不会一打开就顶到
+  /// 状态栏下面；不传则只用默认偏移（调用方自行保证区域安全）。
   WindowModel openWindow({
     required String appId,
     required String title,
@@ -77,6 +81,7 @@ class WindowManager extends ChangeNotifier {
     Size? size,
     Map<String, dynamic>? params,
     bool replaceExisting = false,
+    Size? area,
   }) {
     final existing = findByAppId(appId);
     if (existing != null) {
@@ -91,18 +96,37 @@ class WindowManager extends ChangeNotifier {
       }
     }
     final index = windows.length;
+    var initialSize = size ?? const Size(520, 380);
+    var initialOffset =
+        offset ?? Offset(48 + (index % 5) * 36, 40 + (index % 4) * 32);
+    if (area != null) {
+      initialSize = Size(
+        initialSize.width.clamp(320.0, area.width),
+        initialSize.height.clamp(240.0, area.height),
+      );
+      initialOffset = _clampOffset(initialOffset, initialSize, area);
+    }
     final window = WindowModel(
       id: 'win_${++_counter}',
       title: title,
       appId: appId,
-      offset: offset ??
-          Offset(48 + (index % 5) * 36, 40 + (index % 4) * 32),
-      size: size ?? const Size(520, 380),
+      offset: initialOffset,
+      size: initialSize,
       params: params,
     );
     windows.add(window);
     notifyListeners();
     return window;
+  }
+
+  /// 把窗口左上角夹在区域内（窗口整体不超出区域）。
+  static Offset _clampOffset(Offset offset, Size size, Size area) {
+    final maxX = (area.width - size.width).clamp(0.0, double.infinity);
+    final maxY = (area.height - size.height).clamp(0.0, double.infinity);
+    return Offset(
+      offset.dx.clamp(0.0, maxX),
+      offset.dy.clamp(0.0, maxY),
+    );
   }
 
   void closeWindow(String id) {

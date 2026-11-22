@@ -2,7 +2,7 @@ name: superapp
 description: "SuperApp — 科学计算器、单位转换、函数绘制、AiPlat、WebOS、Super MAX 模式。"
 publish_to: 'none'
 
-version: 0.1.0+1
+version: 0.2.0+1
 
 environment:
   sdk: ^3.14.0

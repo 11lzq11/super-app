@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/settings.dart';
+import 'ios_max.dart';
 import 'root.dart';
 import 'root_shell.dart';
 
@@ -32,8 +33,12 @@ class SuperMaxService extends ChangeNotifier implements SuperMaxController {
 
   final RootService rootService;
 
-  SuperMaxService({RootService? rootService})
-      : rootService = rootService ?? RootService();
+  /// iOS MAX 环境检测器（越狱 / TrollStore）；Android 上不用。
+  final IOSMaxDetector iosMaxDetector;
+
+  SuperMaxService({RootService? rootService, IOSMaxDetector? iosMaxDetector})
+      : rootService = rootService ?? RootService(),
+        iosMaxDetector = iosMaxDetector ?? IOSMaxDetector();
 
   bool _isEnabled = false;
 
@@ -42,11 +47,26 @@ class SuperMaxService extends ChangeNotifier implements SuperMaxController {
   bool get isEnabled => _isEnabled;
 
   /// 是否已检测到 root（缓存的检测结果，未检测过时为 false）。
+  ///
+  /// iOS 上没有 root 概念：这里返回 iOS MAX 是否可用
+  /// （越狱或 TrollStore 安装），供开关与设置页复用。
   @override
-  bool get isRooted => lastRootStatus?.isRooted ?? false;
+  bool get isRooted {
+    if (Platform.isIOS) {
+      return iosMaxDetector.cachedStatus?.maxAvailable ?? false;
+    }
+    return lastRootStatus?.isRooted ?? false;
+  }
 
   /// 上次 root 检测结果（可能为 null，表示尚未检测过）。
   RootStatus? get lastRootStatus => rootService.cachedStatus;
+
+  /// iOS MAX 环境检测结果（仅 iOS 有意义；Android 上为 null）。
+  IOSMaxStatus? get iosMaxStatus => iosMaxDetector.cachedStatus;
+
+  /// iOS 上 Super MAX 是否可用（越狱或 TrollStore 安装）。
+  bool get iosMaxAvailable =>
+      iosMaxDetector.cachedStatus?.maxAvailable ?? false;
 
   /// 开启失败时的原因（如「未检测到 root」），成功时为 null。
   String? lastError;
@@ -57,11 +77,25 @@ class SuperMaxService extends ChangeNotifier implements SuperMaxController {
 
   /// 从本地存储加载开关状态。
   ///
-  /// 如果本地保存的是开启状态，会重新检测 root；检测不到 root 时
-  /// 自动关闭（设备可能已失去 root），避免开关与实际能力不一致。
+  /// iOS：检测只是文件检查，没有授权弹窗，启动时直接跑一次，
+  /// 让设置页能立即显示越狱 / TrollStore 状态。
+  /// 如果本地保存的是开启状态，会重新检测；检测不到可用环境时
+  /// 自动关闭，避免开关与实际能力不一致。
+  /// Android：如果本地保存的是开启状态，会重新检测 root；检测不到
+  /// root 时自动关闭（设备可能已失去 root）。
   Future<void> init() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      if (Platform.isIOS) {
+        final status = await iosMaxDetector.detect(force: true);
+        final saved = prefs.getBool(prefKeyEnabled) ?? false;
+        _isEnabled = saved && status.maxAvailable;
+        if (saved && !_isEnabled) {
+          await prefs.setBool(prefKeyEnabled, false);
+        }
+        notifyListeners();
+        return;
+      }
       final saved = prefs.getBool(prefKeyEnabled) ?? false;
       if (!saved) {
         _isEnabled = false;
@@ -79,20 +113,47 @@ class SuperMaxService extends ChangeNotifier implements SuperMaxController {
   }
 
   /// 重新检测 root 状态（强制重新检测，不用缓存）。
+  ///
+  /// iOS 上返回按 iOS MAX 环境换算的 [RootStatus]
+  ///（isRooted 表示 Super MAX 是否可用，method 是环境中文名）。
   Future<RootStatus> refreshRootStatus() async {
+    if (Platform.isIOS) {
+      final status = await iosMaxDetector.detect(force: true);
+      notifyListeners();
+      return RootStatus(
+        isRooted: status.maxAvailable,
+        method: status.environment.label,
+        detail: status.evidence.isEmpty
+            ? null
+            : status.evidence.first,
+        checkedAt: status.checkedAt,
+      );
+    }
     final status = await rootService.detect(force: true);
     notifyListeners();
     return status;
   }
 
   /// 重新检测 root，返回是否已 root（供 [SuperMaxController] 用）。
+  ///
+  /// iOS 上返回 Super MAX 是否可用（越狱或 TrollStore）。
   @override
   Future<bool> refreshRoot() async {
+    if (Platform.isIOS) {
+      final status = await iosMaxDetector.detect(force: true);
+      notifyListeners();
+      return status.maxAvailable;
+    }
     final status = await refreshRootStatus();
     return status.isRooted;
   }
 
-  /// 开启 Super MAX：先检测 root，未 root 则返回 false 并设置 [lastError]。
+  /// 开启 Super MAX。
+  ///
+  /// iOS：先检测 iOS MAX 环境（越狱或 TrollStore 安装），
+  /// 不可用则返回 false 并设置 [lastError]，不再按 Android 的
+  /// root 逻辑拒绝。
+  /// Android：先检测 root，未 root 则返回 false 并设置 [lastError]。
   @override
   Future<bool> enable() async {
     if (_isEnabled) return true;
@@ -100,6 +161,17 @@ class SuperMaxService extends ChangeNotifier implements SuperMaxController {
     lastError = null;
     notifyListeners();
     try {
+      if (Platform.isIOS) {
+        final status = await iosMaxDetector.detect(force: true);
+        if (!status.maxAvailable) {
+          lastError = '需要越狱或通过 TrollStore 安装才能开启 Super MAX';
+          return false;
+        }
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(prefKeyEnabled, true);
+        _isEnabled = true;
+        return true;
+      }
       final status = await rootService.detect(force: true);
       if (!status.isRooted) {
         lastError = '未检测到 root（需要 folkpatch/APatch 等 root 方案）';

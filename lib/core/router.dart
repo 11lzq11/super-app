@@ -8,8 +8,12 @@ import '../modules/webos/webos_page.dart';
 import '../modules/tools/json_formatter_page.dart';
 import '../modules/tools/password_generator_page.dart';
 import '../modules/tools/qr_generator_page.dart';
+import '../modules/tools/random_number_page.dart';
+import '../modules/tools/stopwatch_page.dart';
+import '../modules/tools/text_tools_page.dart';
 import '../pages/module_placeholder_page.dart';
 import '../pages/settings_page.dart';
+import '../supermax/toolbox_page.dart';
 
 /// 路由表。
 ///
@@ -28,9 +32,13 @@ class AppRoutes {
   static const String plotter = '/plotter';
   static const String aiplat = '/aiplat';
   static const String webos = '/webos';
+  static const String supermaxToolbox = '/supermax/toolbox';
   static const String passwordGenerator = '/tools/password';
   static const String jsonFormatter = '/tools/json';
   static const String qrGenerator = '/tools/qr';
+  static const String stopwatch = '/tools/stopwatch';
+  static const String randomNumber = '/tools/random';
+  static const String textTools = '/tools/text';
 
   static Map<String, WidgetBuilder> get routes => {
         settings: (_) => const SettingsPage(),
@@ -39,8 +47,12 @@ class AppRoutes {
         plotter: (_) => const PlotterPage(),
         aiplat: (_) => const AiPlatPage(),
         webos: (_) => const WebOSPage(),
+        supermaxToolbox: (_) => const ToolboxPage(),
         passwordGenerator: (_) => const PasswordGeneratorPage(),
         jsonFormatter: (_) => const JsonFormatterPage(),
         qrGenerator: (_) => const QrGeneratorPage(),
+        stopwatch: (_) => const StopwatchPage(),
+        randomNumber: (_) => const RandomNumberPage(),
+        textTools: (_) => const TextToolsPage(),
       };
 }

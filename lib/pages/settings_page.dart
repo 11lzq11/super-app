@@ -1,14 +1,18 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/settings.dart';
+import '../supermax/ios_max.dart';
+import '../supermax/supermax_service.dart';
 
-/// 统一设置页：主题、语言、Super MAX 开关 + root 状态、存储占用、关于。
+/// 统一设置页：主题、语言、Super MAX 开关 + root/iOS 环境状态、存储占用、关于。
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
 
   static const String _repoUrl = 'https://github.com/11lzq11/super-app';
-  static const String _version = '0.1.0';
+  static const String _version = '0.2.0';
 
   String _rootStatusText(RootCheckStatus status) {
     return switch (status) {
@@ -16,6 +20,12 @@ class SettingsPage extends StatelessWidget {
       RootCheckStatus.notRooted => '未检测到 root',
       RootCheckStatus.unknown => '尚未检测',
     };
+  }
+
+  String _iosMaxStatusText(IOSMaxStatus? status) {
+    final s = status;
+    if (s == null) return '尚未检测';
+    return '${s.environment.label}：${s.environment.description}';
   }
 
   void _showMessage(BuildContext context, String message) {
@@ -29,22 +39,38 @@ class SettingsPage extends StatelessWidget {
     SettingsService settings,
     bool value,
   ) async {
+    final unavailableMessage = Platform.isIOS
+        ? '需要越狱或通过 TrollStore 安装才能开启 Super MAX'
+        : '未检测到 root（需要 folkpatch/APatch 等 root 方案）';
     if (value && !settings.isRooted) {
-      _showMessage(context, '未检测到 root（需要 folkpatch/APatch 等 root 方案）');
+      _showMessage(context, unavailableMessage);
       return;
     }
     final ok = await settings.setSuperMaxEnabled(value);
     if (!ok && context.mounted) {
-      _showMessage(context, '未检测到 root（需要 folkpatch/APatch 等 root 方案）');
+      _showMessage(context, unavailableMessage);
     }
   }
 
   Future<void> _onRecheckRoot(
     BuildContext context,
     SettingsService settings,
+    SuperMaxService superMax,
   ) async {
     await settings.refreshRootStatus(force: true);
     if (!context.mounted) return;
+    if (Platform.isIOS) {
+      final status = superMax.iosMaxStatus;
+      if (settings.isRooted) {
+        _showMessage(
+          context,
+          'iOS MAX 可用：${status?.environment.label ?? '已检测'}',
+        );
+      } else {
+        _showMessage(context, '需要越狱或通过 TrollStore 安装才能开启 Super MAX');
+      }
+      return;
+    }
     if (settings.isRooted) {
       _showMessage(context, '已检测到 root');
     } else {
@@ -65,10 +91,62 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
+  /// iOS MAX 环境详情：可用能力与不可用/受限的能力（仅 iOS 显示）。
+  Widget _iosMaxDetails(BuildContext context, IOSMaxStatus status) {
+    final textStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        );
+    final children = <Widget>[
+      ListTile(
+        leading: const Icon(Icons.phone_iphone),
+        title: const Text('iOS MAX 环境'),
+        subtitle: Text(
+          '${status.environment.label}\n${status.environment.description}',
+        ),
+      ),
+    ];
+    if (status.capabilities.isNotEmpty) {
+      children.add(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+          child: Text(
+            '可用能力：\n${status.capabilities.map((c) => '• $c').join('\n')}',
+            style: textStyle,
+          ),
+        ),
+      );
+    }
+    if (status.limitations.isNotEmpty) {
+      children.add(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Text(
+            '不可用 / 受限：\n${status.limitations.map((c) => '• $c').join('\n')}',
+            style: textStyle,
+          ),
+        ),
+      );
+    }
+    if (status.evidence.isNotEmpty) {
+      children.add(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Text(
+            '检测依据：\n${status.evidence.map((c) => '• $c').join('\n')}',
+            style: textStyle,
+          ),
+        ),
+      );
+    }
+    return Column(children: children);
+  }
+
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsService>();
+    final superMax = context.watch<SuperMaxService>();
     final scheme = Theme.of(context).colorScheme;
+    final isIOS = Platform.isIOS;
 
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
@@ -104,25 +182,38 @@ class SettingsPage extends StatelessWidget {
           _sectionTitle(context, 'Super MAX'),
           SwitchListTile(
             title: const Text('Super MAX 模式'),
-            subtitle: Text(_rootStatusText(settings.rootStatus)),
+            subtitle: Text(
+              isIOS
+                  ? _iosMaxStatusText(superMax.iosMaxStatus)
+                  : _rootStatusText(settings.rootStatus),
+            ),
             value: settings.superMaxEnabled,
-            // 未检测到 root 时开关不可用。
+            // 未检测到 root / iOS 环境不可用时开关不可用。
             onChanged: settings.isRooted
                 ? (value) => _onSuperMaxChanged(context, settings, value)
                 : null,
           ),
+          if (isIOS && superMax.iosMaxStatus != null)
+            _iosMaxDetails(context, superMax.iosMaxStatus!),
           ListTile(
             leading: const Icon(Icons.refresh),
-            title: const Text('重新检测 root'),
-            subtitle: const Text('检查设备是否已 root（folkpatch / APatch）'),
-            onTap: () => _onRecheckRoot(context, settings),
+            title: Text(isIOS ? '重新检测 iOS 环境' : '重新检测 root'),
+            subtitle: Text(
+              isIOS
+                  ? '检查是否越狱或通过 TrollStore 安装'
+                  : '检查设备是否已 root（folkpatch / APatch）',
+            ),
+            onTap: () => _onRecheckRoot(context, settings, superMax),
           ),
           if (settings.superMaxEnabled)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
               child: Text(
-                'Super MAX 已开启：AI 手机操作、WebOS 真实文件读写等 root 功能可用，'
-                '所有 root 操作执行前都会请你确认。',
+                isIOS
+                    ? 'Super MAX 已开启：沙盒外文件读写、系统偏好操作等 iOS MAX '
+                        '功能可用（能力范围见上方环境详情），所有系统级操作执行前都会请你确认。'
+                    : 'Super MAX 已开启：AI 手机操作、WebOS 真实文件读写等 root 功能可用，'
+                        '所有 root 操作执行前都会请你确认。',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: scheme.onSurfaceVariant,
                     ),

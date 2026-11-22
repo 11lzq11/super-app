@@ -43,6 +43,48 @@ class WebOSLocalServer {
     );
   }
 
+  /// 确保服务真的能响应：未启动则启动；启动后探测一次，
+  /// 探测失败则重启一次再探测。
+  ///
+  /// 任意一次 HTTP 响应（哪怕 404）都算服务存活 —— 只有连接不上
+  /// 才算未就绪。WebView 加载前调一次，避免对着没起来的服务发请求。
+  Future<bool> ensureReady() async {
+    if (!isRunning) {
+      try {
+        await start();
+      } catch (_) {
+        return false;
+      }
+    }
+    if (await _probe()) return true;
+    try {
+      await stop();
+      await start();
+    } catch (_) {
+      return false;
+    }
+    return _probe();
+  }
+
+  /// 向服务根地址发一个 GET：能拿到响应即存活。
+  Future<bool> _probe() async {
+    final base = baseUrl;
+    if (base == null) return false;
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 2);
+    try {
+      final request = await client.getUrl(Uri.parse(base));
+      final response =
+          await request.close().timeout(const Duration(seconds: 2));
+      await response.drain<void>();
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      client.close();
+    }
+  }
+
   /// 某个 HTML 应用的完整 URL，未启动时为 null。
   String? appUrl(String appId) {
     final base = baseUrl;

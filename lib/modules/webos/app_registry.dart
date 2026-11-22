@@ -101,52 +101,80 @@ class WebOSAppRegistry {
 
   /// 扫描 webos/apps/，读出已安装的 HTML 应用。
   /// 每个子目录即一个应用，优先读 manifest.json，否则用目录名做名字。
+  ///
+  /// 容错：目录不可读时返回空列表；单个应用目录损坏（缺 index.html、
+  /// manifest 读失败等）时跳过该应用，不影响其他应用和桌面加载。
   static Future<List<WebOSApp>> installedHtmlApps() async {
     final dir = await WebOSPaths.appsDir();
     final result = <WebOSApp>[];
     if (!await dir.exists()) return result;
-    await for (final entity in dir.list()) {
+    List<FileSystemEntity> entries;
+    try {
+      entries = await dir.list().toList();
+    } catch (_) {
+      return result;
+    }
+    for (final entity in entries) {
       if (entity is! Directory) continue;
-      final id = entity.path.split(Platform.pathSeparator).last;
-      final index = File(
-        '${entity.path}${Platform.pathSeparator}index.html',
-      );
-      if (!await index.exists()) continue;
-      String name = id;
-      String? version;
-      String? description;
-      final manifestFile = File(
-        '${entity.path}${Platform.pathSeparator}manifest.json',
-      );
-      if (await manifestFile.exists()) {
-        try {
-          final map = jsonDecode(await manifestFile.readAsString())
-              as Map<String, dynamic>;
-          name = (map['name'] as String?)?.trim().isNotEmpty == true
-              ? map['name'] as String
-              : id;
-          version = map['version'] as String?;
-          description = map['description'] as String?;
-        } catch (_) {
-          // manifest 损坏时仍按目录名展示
-        }
+      try {
+        final app = await _readInstalledApp(entity);
+        if (app != null) result.add(app);
+      } catch (_) {
+        // 单个应用损坏：跳过
+        continue;
       }
-      result.add(WebOSApp(
-        id: id,
-        name: name,
-        icon: Icons.web_asset_outlined,
-        kind: WebOSAppKind.html,
-        version: version,
-        description: description,
-      ));
     }
     result.sort((a, b) => a.name.compareTo(b.name));
     return result;
   }
 
+  /// 读一个已安装应用目录；缺 index.html 或目录名非法时返回 null。
+  static Future<WebOSApp?> _readInstalledApp(Directory entity) async {
+    final id = entity.path.split(Platform.pathSeparator).last;
+    if (id.isEmpty || id.startsWith('.')) return null;
+    final index = File(
+      '${entity.path}${Platform.pathSeparator}index.html',
+    );
+    if (!await index.exists()) return null;
+    String name = id;
+    String? version;
+    String? description;
+    final manifestFile = File(
+      '${entity.path}${Platform.pathSeparator}manifest.json',
+    );
+    if (await manifestFile.exists()) {
+      try {
+        final map = jsonDecode(await manifestFile.readAsString())
+            as Map<String, dynamic>;
+        name = (map['name'] as String?)?.trim().isNotEmpty == true
+            ? map['name'] as String
+            : id;
+        version = map['version'] as String?;
+        description = map['description'] as String?;
+      } catch (_) {
+        // manifest 损坏时仍按目录名展示
+      }
+    }
+    return WebOSApp(
+      id: id,
+      name: name,
+      icon: Icons.web_asset_outlined,
+      kind: WebOSAppKind.html,
+      version: version,
+      description: description,
+    );
+  }
+
   /// 全部应用：内置 + 已安装的 HTML 应用。
+  /// HTML 应用扫描失败时只返回内置应用，不抛错。
   static Future<List<WebOSApp>> allApps() async {
-    return [...builtinApps, ...await installedHtmlApps()];
+    List<WebOSApp> installed = [];
+    try {
+      installed = await installedHtmlApps();
+    } catch (_) {
+      installed = [];
+    }
+    return [...builtinApps, ...installed];
   }
 
   /// 按 id 查找任意应用（先内置，后已安装）。

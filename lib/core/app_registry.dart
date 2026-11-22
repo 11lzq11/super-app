@@ -87,6 +87,30 @@ class AppRegistry {
       category: ModuleCategory.tools,
       route: '/tools/qr',
     ),
+    ModuleInfo(
+      id: 'stopwatch',
+      title: '秒表与倒计时',
+      subtitle: '秒表计次、倒计时提醒',
+      icon: Icons.timer_outlined,
+      category: ModuleCategory.tools,
+      route: '/tools/stopwatch',
+    ),
+    ModuleInfo(
+      id: 'random-number',
+      title: '随机数',
+      subtitle: '随机整数、掷骰子、抛硬币',
+      icon: Icons.casino_outlined,
+      category: ModuleCategory.tools,
+      route: '/tools/random',
+    ),
+    ModuleInfo(
+      id: 'text-tools',
+      title: '文本工具',
+      subtitle: '大小写转换、字数统计',
+      icon: Icons.text_fields,
+      category: ModuleCategory.tools,
+      route: '/tools/text',
+    ),
     // AI
     ModuleInfo(
       id: 'aiplat',
@@ -97,6 +121,14 @@ class AppRegistry {
       route: '/aiplat',
     ),
     // 系统
+    ModuleInfo(
+      id: 'supermax-toolbox',
+      title: 'Super MAX 工具箱',
+      subtitle: 'AI 调设置、系统设置、应用管理、文件管理…',
+      icon: Icons.bolt_rounded,
+      category: ModuleCategory.system,
+      route: '/supermax/toolbox',
+    ),
     ModuleInfo(
       id: 'webos',
       title: 'WebOS',

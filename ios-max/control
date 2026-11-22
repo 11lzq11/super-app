@@ -1,0 +1,10 @@
+Package: com.superapp.max
+Name: SuperApp MAX
+Version: 0.1.0
+Architecture: iphoneos-arm
+Description: System-level companion tweak for SuperApp (Super MAX on iOS). Provides settings read/write and file access to SuperApp via Darwin notifications + shared JSON files. Skeleton build, unverified on device.
+Maintainer: SuperApp <superapp@example.invalid>
+Author: SuperApp
+Section: Tweaks
+Depends: mobilesubstrate
+Homepage: https://github.com/11lzq11/super-app

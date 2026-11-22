@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../core/app_registry.dart';
 import '../core/router.dart';
 import '../core/settings.dart';
+import '../core/theme.dart';
 import '../widgets/module_card.dart';
 
 /// 首页：应用抽屉。
@@ -35,10 +36,16 @@ class _HomePageState extends State<HomePage> {
 
   Widget _sectionTitle(String title) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+      padding: const EdgeInsets.fromLTRB(
+        AppDimens.pagePadding,
+        AppDimens.sectionSpacing,
+        AppDimens.pagePadding,
+        8,
+      ),
       child: Text(
         title,
-        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
               fontWeight: FontWeight.w600,
             ),
       ),
@@ -47,15 +54,18 @@ class _HomePageState extends State<HomePage> {
 
   Widget _moduleGrid(List<ModuleInfo> modules, double width) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: AppDimens.pagePadding),
       child: GridView.builder(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: _crossAxisCount(width),
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 1.3,
+          mainAxisSpacing: AppDimens.itemSpacing,
+          crossAxisSpacing: AppDimens.itemSpacing,
+          // 固定高度而非宽高比：v0.1.0 用 childAspectRatio 1.3，
+          // 手机上卡片只有约 121dp 高，装不下简介 2 行被裁掉。
+          // 148dp 按卡片内容（约 132dp）+ 余量算出，列宽变化也不影响。
+          mainAxisExtent: AppDimens.moduleCardHeight,
         ),
         itemCount: modules.length,
         itemBuilder: (context, index) {
@@ -90,9 +100,15 @@ class _HomePageState extends State<HomePage> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+            padding: const EdgeInsets.fromLTRB(
+              AppDimens.pagePadding,
+              4,
+              AppDimens.pagePadding,
+              4,
+            ),
             child: TextField(
               controller: _searchController,
+              textInputAction: TextInputAction.search,
               decoration: InputDecoration(
                 hintText: '搜索功能',
                 prefixIcon: const Icon(Icons.search),
@@ -112,7 +128,12 @@ class _HomePageState extends State<HomePage> {
           ),
           if (settings.superMaxEnabled)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              padding: const EdgeInsets.fromLTRB(
+                AppDimens.pagePadding,
+                8,
+                AppDimens.pagePadding,
+                0,
+              ),
               child: Row(
                 children: [
                   Container(
@@ -178,11 +199,32 @@ class _HomePageState extends State<HomePage> {
   Widget _buildSearchResult(List<ModuleInfo> modules, double width) {
     if (modules.isEmpty) {
       return Center(
-        child: Text(
-          '没有找到相关功能',
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 48),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.search_off_outlined,
+                size: 48,
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
+              const SizedBox(height: 12),
+              Text(
+                '没有找到相关功能',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '试试其他关键词',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
+            ],
+          ),
         ),
       );
     }

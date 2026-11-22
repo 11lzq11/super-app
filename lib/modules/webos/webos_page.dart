@@ -73,24 +73,63 @@ class _WebOSPageState extends State<WebOSPage> {
   }
 
   Future<void> _init() async {
-    await WebOSPaths.ensureAll();
+    // 每一步都独立容错：任何一步失败都只降级，不让页面卡在加载转圈上。
+    try {
+      await WebOSPaths.ensureAll();
+    } catch (e) {
+      _serverError = '数据目录初始化失败：$e';
+    }
     try {
       await WebOSLocalServer.instance.start();
     } catch (e) {
       _serverError = '$e';
     }
-    await AppStoreService.ensureSamplesInstalled();
+    try {
+      await AppStoreService.ensureSamplesInstalled();
+    } catch (_) {
+      // 示例应用安装失败不阻塞进入桌面；可在应用市场里重试安装。
+    }
     await loadWebOSWallpaper();
     await loadWebOSDarkMode();
     _windowMode = await loadWebOSWindowMode();
-    _supermax = await SuperMaxBridge.isEnabled();
+    try {
+      _supermax = await SuperMaxBridge.isEnabled();
+    } catch (_) {
+      _supermax = false;
+    }
     await _refreshApps();
     if (mounted) setState(() => _ready = true);
   }
 
   Future<void> _refreshApps() async {
-    final apps = await WebOSAppRegistry.allApps();
+    List<WebOSApp> apps;
+    try {
+      apps = await WebOSAppRegistry.allApps();
+    } catch (_) {
+      // 应用扫描失败时只显示内置应用，桌面照常可用。
+      apps = WebOSAppRegistry.builtinApps;
+    }
     if (mounted) setState(() => _apps = apps);
+  }
+
+  /// 桌面布局度量：顶栏避让高度、底部手势条高度、任务栏高度、
+  /// 窗口可活动区域（已扣掉顶栏避让区与任务栏）。
+  ({double topInset, double bottomInset, double taskbarHeight, Size area})
+      _layoutMetrics(Size size) {
+    final padding = MediaQuery.of(context).padding;
+    final desktop = _isDesktopMode(size);
+    final taskbarHeight = (desktop ? 48.0 : 64.0) + padding.bottom;
+    final area = Size(
+      size.width,
+      (size.height - padding.top - taskbarHeight)
+          .clamp(0.0, double.infinity),
+    );
+    return (
+      topInset: padding.top,
+      bottomInset: padding.bottom,
+      taskbarHeight: taskbarHeight,
+      area: area,
+    );
   }
 
   bool _isDesktopMode(Size size) {
@@ -111,13 +150,15 @@ class _WebOSPageState extends State<WebOSPage> {
     Map<String, dynamic>? params,
     bool replaceExisting = false,
   }) {
-    final desktop = _isDesktopMode(MediaQuery.of(context).size);
+    final size = MediaQuery.of(context).size;
+    final metrics = _layoutMetrics(size);
     _wm.openWindow(
       appId: app.id,
       title: app.name,
       params: params,
-      size: desktop ? const Size(520, 380) : const Size(520, 380),
+      size: const Size(520, 380),
       replaceExisting: replaceExisting,
+      area: metrics.area,
     );
     if (_startMenuOpen) setState(() => _startMenuOpen = false);
   }
@@ -230,7 +271,19 @@ class _WebOSPageState extends State<WebOSPage> {
     return app?.icon ?? Icons.web_asset_outlined;
   }
 
+  /// 窗口内容：同步构建失败时显示错误页，不让单个应用拖垮整个窗口层。
   Widget _buildWindowContent(WindowModel window) {
+    try {
+      return _buildWindowContentInner(window);
+    } catch (e) {
+      return _WindowLoadErrorView(
+        message: '应用加载失败：$e',
+        onClose: () => _wm.closeWindow(window.id),
+      );
+    }
+  }
+
+  Widget _buildWindowContentInner(WindowModel window) {
     final app = _findApp(window.appId);
     if (app == null) {
       return const Center(child: Text('应用不存在或已被卸载'));
@@ -332,10 +385,18 @@ class _WebOSPageState extends State<WebOSPage> {
   Widget _buildWindowFrame(WindowModel window, bool desktop, Size area) {
     final isActive = _wm.activeWindow?.id == window.id;
     final frame = Material(
-      elevation: isActive ? 14 : 6,
+      elevation: isActive ? 16 : 8,
       borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
       color: WebOSColors.windowBackground,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: isActive
+              ? Colors.black.withValues(alpha: 0.12)
+              : Colors.black.withValues(alpha: 0.07),
+        ),
+      ),
       child: Column(
         children: [
           _buildTitleBar(window, desktop, area),
@@ -403,31 +464,38 @@ class _WebOSPageState extends State<WebOSPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 52,
-                height: 52,
+                width: 54,
+                height: 54,
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.92),
-                  borderRadius: BorderRadius.circular(14),
+                  color: Colors.white.withValues(alpha: 0.94),
+                  borderRadius: BorderRadius.circular(15),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.2),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
+                      color: Colors.black.withValues(alpha: 0.22),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
                     ),
                   ],
                 ),
-                child: Icon(app.icon, size: 26, color: const Color(0xFF0F172A)),
+                child: Icon(app.icon, size: 27, color: const Color(0xFF0F172A)),
               ),
               const SizedBox(height: 5),
-              Text(
-                app.name,
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  shadows: [Shadow(color: Colors.black54, blurRadius: 4)],
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.35),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  app.name,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                  ),
                 ),
               ),
             ],
@@ -437,10 +505,10 @@ class _WebOSPageState extends State<WebOSPage> {
     );
   }
 
-  Widget _buildStartMenu(Size size) {
+  Widget _buildStartMenu(Size size, double taskbarHeight) {
     return Positioned(
       left: 12,
-      bottom: 56,
+      bottom: taskbarHeight + 8,
       width: 360,
       height: size.height > 560 ? 440 : size.height - 120,
       child: Material(
@@ -586,14 +654,18 @@ class _WebOSPageState extends State<WebOSPage> {
     }
   }
 
-  Widget _buildTaskbar(Size size) {
+  Widget _buildTaskbar(Size size, double bottomInset) {
     return Positioned(
       left: 0,
       right: 0,
       bottom: 0,
-      height: 48,
+      height: 48 + bottomInset,
       child: Container(
-        color: WebOSColors.taskbarBackground,
+        decoration: BoxDecoration(
+          color: WebOSColors.taskbarBackground,
+          border: Border(top: BorderSide(color: WebOSColors.border)),
+        ),
+        padding: EdgeInsets.only(bottom: bottomInset),
         child: Row(
           children: [
             InkWell(
@@ -702,15 +774,18 @@ class _WebOSPageState extends State<WebOSPage> {
     );
   }
 
-  Widget _buildDock(Size size) {
+  Widget _buildDock(Size size, double bottomInset) {
     return Positioned(
       left: 0,
       right: 0,
       bottom: 0,
-      height: 64,
+      height: 64 + bottomInset,
       child: Container(
-        color: WebOSColors.taskbarBackground,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          color: WebOSColors.taskbarBackground,
+          border: Border(top: BorderSide(color: WebOSColors.border)),
+        ),
+        padding: EdgeInsets.fromLTRB(8, 0, 8, bottomInset),
         child: Row(
           children: [
             Expanded(
@@ -748,6 +823,14 @@ class _WebOSPageState extends State<WebOSPage> {
                               border: active
                                   ? Border.all(color: Colors.blue)
                                   : null,
+                              boxShadow: [
+                                BoxShadow(
+                                  color:
+                                      Colors.black.withValues(alpha: 0.12),
+                                  blurRadius: 6,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
                             ),
                             child: Icon(
                               app.icon,
@@ -830,8 +913,11 @@ class _WebOSPageState extends State<WebOSPage> {
         builder: (context, constraints) {
           final size = Size(constraints.maxWidth, constraints.maxHeight);
           final desktop = _isDesktopMode(size);
-          final taskbarHeight = desktop ? 48.0 : 64.0;
-          final area = Size(size.width, size.height - taskbarHeight);
+          final metrics = _layoutMetrics(size);
+          final topInset = metrics.topInset;
+          final bottomInset = metrics.bottomInset;
+          final taskbarHeight = metrics.taskbarHeight;
+          final area = metrics.area;
           final wallpaper = webOSWallpapers[webOSWallpaperNotifier.value];
           final visibleWindows = desktop
               ? _wm.windows.where((w) => !w.minimized).toList()
@@ -841,15 +927,15 @@ class _WebOSPageState extends State<WebOSPage> {
 
           return Stack(
             children: [
-              // 壁纸
+              // 壁纸（全屏 bleed，状态栏下也铺满）
               Container(
                 decoration: BoxDecoration(gradient: wallpaper.gradient),
               ),
-              // 桌面图标（桌面模式）
+              // 桌面图标（桌面模式）：从顶栏避让区下方开始
               if (desktop)
                 Positioned(
                   left: 16,
-                  top: 16,
+                  top: topInset + 16,
                   bottom: taskbarHeight + 8,
                   child: SingleChildScrollView(
                     child: Column(
@@ -857,12 +943,19 @@ class _WebOSPageState extends State<WebOSPage> {
                     ),
                   ),
                 ),
-              // 手机模式：无活动窗口时显示主屏幕
-              if (!desktop && visibleWindows.isEmpty) _buildPhoneHome(),
-              // 窗口层
+              // 手机模式：无活动窗口时显示主屏幕（避让顶栏与 Dock）
+              if (!desktop && visibleWindows.isEmpty)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: topInset,
+                  bottom: taskbarHeight,
+                  child: _buildPhoneHome(),
+                ),
+              // 窗口层：从顶栏避让区下方开始，高度为安全区域
               Positioned(
                 left: 0,
-                top: 0,
+                top: topInset,
                 width: size.width,
                 height: area.height,
                 child: Stack(
@@ -871,10 +964,10 @@ class _WebOSPageState extends State<WebOSPage> {
                       .toList(),
                 ),
               ),
-              // 本地服务失败提示
+              // 本地服务失败提示（顶栏避让区下方）
               if (_serverError != null)
                 Positioned(
-                  top: 8,
+                  top: topInset + 8,
                   left: 16,
                   right: 16,
                   child: Center(
@@ -898,12 +991,50 @@ class _WebOSPageState extends State<WebOSPage> {
                   ),
                 ),
               // 开始菜单
-              if (desktop && _startMenuOpen) _buildStartMenu(size),
+              if (desktop && _startMenuOpen) _buildStartMenu(size, taskbarHeight),
               // 任务栏 / Dock
-              if (desktop) _buildTaskbar(size) else _buildDock(size),
+              if (desktop)
+                _buildTaskbar(size, bottomInset)
+              else
+                _buildDock(size, bottomInset),
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+/// 窗口内容加载失败时的兜底页：只影响这一个窗口。
+class _WindowLoadErrorView extends StatelessWidget {
+  final String message;
+  final VoidCallback onClose;
+
+  const _WindowLoadErrorView({required this.message, required this.onClose});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.warning_amber_outlined,
+              size: 40,
+              color: Colors.orange,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 16),
+            FilledButton(onPressed: onClose, child: const Text('关闭窗口')),
+          ],
+        ),
       ),
     );
   }
