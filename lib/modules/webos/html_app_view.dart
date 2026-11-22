@@ -151,6 +151,7 @@ class _HtmlAppViewState extends State<HtmlAppView> {
   Future<void> _loadAttempt() async {
     if (!mounted) return;
     _attempt++;
+    _pageLoaded = false;
     setState(() {
       _error = null;
       _errorDetail = null;
@@ -416,12 +417,11 @@ class _HtmlAppViewState extends State<HtmlAppView> {
     if (controller == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    return Stack(
-      children: [
-        WebViewWidget(controller: controller),
-        if (_loading)
-          const Center(child: CircularProgressIndicator()),
-      ],
-    );
+    // 首次加载成功前只显示转圈，不把 WebViewWidget 挂出来：
+    // 否则加载失败时 WebView 会先闪一下系统自带的“网页无法打开”错误页。
+    if (_loading && !_pageLoaded) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return WebViewWidget(controller: controller);
   }
 }

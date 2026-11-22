@@ -12,7 +12,7 @@ class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
 
   static const String _repoUrl = 'https://github.com/11lzq11/super-app';
-  static const String _version = '0.2.0';
+  static const String _version = '0.2.1';
 
   String _rootStatusText(RootCheckStatus status) {
     return switch (status) {
